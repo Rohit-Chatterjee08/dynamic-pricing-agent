@@ -1,0 +1,277 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  extensions = [pgcrypto]
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String    @map("access_token") // Encrypted in application layer
+  userId        BigInt?   @map("user_id")
+  firstName     String?   @map("first_name")
+  lastName      String?   @map("last_name")
+  email         String?
+  accountOwner  Boolean   @default(false) @map("account_owner")
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false) @map("email_verified")
+  
+  // Relationship to Shop
+  shopData      Shop?     @relation(fields: [shop], references: [shop])
+  
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([shop])
+  @@index([expires])
+  @@map("sessions")
+}
+
+model Shop {
+  id                    String      @id @default(cuid())
+  shop                  String      @unique // myshop.myshopify.com
+  name                  String?
+  email                 String?
+  domain                String?
+  province              String?
+  country               String?
+  address1              String?
+  zip                   String?
+  city                  String?
+  phone                 String?
+  latitude              Float?
+  longitude             Float?
+  primaryLocale         String?     @map("primary_locale")
+  address2              String?
+  
+  // Installation & Status
+  installedAt           DateTime    @default(now()) @map("installed_at")
+  uninstalledAt         DateTime?   @map("uninstalled_at")
+  isActive              Boolean     @default(true) @map("is_active")
+  planName              String?     @map("plan_name")
+  
+  // Encrypted fields
+  accessTokenEncrypted  String?     @map("access_token_encrypted")
+  webhookSecret         String?     @map("webhook_secret")
+  
+  // App-specific data
+  appSettings           Json?       @map("app_settings")
+  features              String[]    @default([])
+  
+  // Billing
+  subscriptions         Subscription[]
+  billingCycles         BillingCycle[]
+  
+  // Sessions
+  sessions              Session[]
+  
+  // Webhooks
+  webhookDeliveries     WebhookDelivery[]
+  
+  // Audit
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+
+  @@index([shop])
+  @@index([isActive])
+  @@index([installedAt])
+  @@map("shops")
+}
+
+model Subscription {
+  id                    String      @id @default(cuid())
+  shop                  String
+  shopData              Shop        @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  
+  // Shopify Billing API fields
+  shopifySubscriptionId String?     @unique @map("shopify_subscription_id")
+  name                  String
+  status                SubscriptionStatus
+  currentPeriodEnd      DateTime?   @map("current_period_end")
+  trialDays             Int?        @map("trial_days")
+  trialEndsOn           DateTime?   @map("trial_ends_on")
+  
+  // Pricing
+  price                 Decimal     @db.Decimal(10, 2)
+  currency              String      @default("USD")
+  
+  // Usage-based billing
+  cappedAmount          Decimal?    @map("capped_amount") @db.Decimal(10, 2)
+  usageRecords          UsageRecord[]
+  
+  // Billing cycles
+  billingCycles         BillingCycle[]
+  
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+
+  @@index([shop])
+  @@index([status])
+  @@index([currentPeriodEnd])
+  @@map("subscriptions")
+}
+
+model BillingCycle {
+  id              String        @id @default(cuid())
+  shop            String
+  shopData        Shop          @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  subscription    Subscription  @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscriptionId  String        @map("subscription_id")
+  
+  startDate       DateTime      @map("start_date")
+  endDate         DateTime      @map("end_date")
+  amount          Decimal       @db.Decimal(10, 2)
+  currency        String        @default("USD")
+  status          BillingStatus @default(PENDING)
+  
+  // Shopify fields
+  shopifyChargeId String?       @map("shopify_charge_id")
+  billedAt        DateTime?     @map("billed_at")
+  
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@index([shop])
+  @@index([status])
+  @@index([startDate, endDate])
+  @@map("billing_cycles")
+}
+
+model UsageRecord {
+  id             String       @id @default(cuid())
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  subscriptionId String       @map("subscription_id")
+  
+  // Usage tracking
+  description    String
+  quantity       Int
+  price          Decimal      @db.Decimal(10, 2)
+  recordedAt     DateTime     @map("recorded_at")
+  
+  // Shopify fields
+  shopifyUsageId String?      @unique @map("shopify_usage_id")
+  
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  @@index([subscriptionId])
+  @@index([recordedAt])
+  @@map("usage_records")
+}
+
+model WebhookDelivery {
+  id              String            @id @default(cuid())
+  shop            String
+  shopData        Shop              @relation(fields: [shop], references: [shop], onDelete: Cascade)
+  
+  // Webhook details
+  topic           String
+  webhookId       String?           @map("webhook_id")
+  
+  // Request details
+  headers         Json?
+  body            Json?
+  queryParams     Json?             @map("query_params")
+  
+  // Processing
+  status          WebhookStatus     @default(PENDING)
+  attempts        Int               @default(0)
+  lastAttemptAt   DateTime?         @map("last_attempt_at")
+  processedAt     DateTime?         @map("processed_at")
+  errorMessage    String?           @map("error_message")
+  
+  // HMAC validation
+  hmacValid       Boolean?          @map("hmac_valid")
+  
+  // Queue processing
+  jobId           String?           @map("job_id")
+  
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  @@index([shop, topic])
+  @@index([status])
+  @@index([createdAt])
+  @@map("webhook_deliveries")
+}
+
+model QueueJob {
+  id            String        @id @default(cuid())
+  type          String
+  data          Json
+  status        JobStatus     @default(PENDING)
+  attempts      Int           @default(0)
+  maxAttempts   Int           @default(3) @map("max_attempts")
+  
+  // Timing
+  scheduledFor  DateTime?     @map("scheduled_for")
+  startedAt     DateTime?     @map("started_at")
+  completedAt   DateTime?     @map("completed_at")
+  failedAt      DateTime?     @map("failed_at")
+  
+  // Error handling
+  errorMessage  String?       @map("error_message")
+  errorStack    String?       @map("error_stack")
+  
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+
+  @@index([status, scheduledFor])
+  @@index([type])
+  @@index([createdAt])
+  @@map("queue_jobs")
+}
+
+// Enums
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  TRIAL
+  PENDING
+  FROZEN
+  
+  @@map("subscription_status")
+}
+
+enum BillingStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  
+  @@map("billing_status")
+}
+
+enum WebhookStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  RETRY
+  
+  @@map("webhook_status")
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  
+  @@map("job_status")
+}
